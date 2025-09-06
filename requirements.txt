@@ -1,0 +1,12 @@
+numpy
+pandas
+scikit-learn
+tensorflow
+opencv-python
+matplotlib==3.8.0
+requests
+mediapipe
+plotly
+fastapi
+uvicorn
+flask

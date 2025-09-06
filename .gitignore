@@ -1,0 +1,5 @@
+# macOS environment files
+.DS_Store
+.env
+macenv/
+._*
