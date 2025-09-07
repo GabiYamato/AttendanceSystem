@@ -135,7 +135,7 @@ schedules: {
 ### **Tech Stack**
 
 * **Backend**: Python (FastAPI/Flask) for recognition + Firestore SDK.
-* **Frontend**: React + Tailwind + Framer Motion.
+* **Frontend**: React (typescript) + Tailwind + Framer Motion.
 * **Database**: Firebase Firestore.
 * **AI Scheduling**: Gemini API via CREW AI (API key from `.env`).
 * **Authentication**: Firebase Auth (students & teachers).
