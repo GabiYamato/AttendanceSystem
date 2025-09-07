@@ -1,0 +1,153 @@
+
+Smart Attendance & Class Management System
+
+You are tasked with building a **modern, full-stack attendance and classroom management system**. The system should integrate **face recognition embeddings, Firebase for data storage, and modern React frontends** with a minimal pastel UI design inspired by Apple.
+
+---
+
+### **Core Features**
+
+#### 1. **Attendance System** (mostly implemented)
+
+* Python backend (FastAPI/Flask) for recognition.
+* Embeddings are precomputed and stored in Firebase.
+* Attendance is logged with:
+
+  * `student_id`, `name`, `class_id`, `timestamp`, `status`.
+* Duplicate prevention: only one attendance per student per class session.
+
+---
+
+#### 2. **Student Registration System**
+
+* **React frontend**:
+
+  * Form to input student details (Name, Roll No, Email, Class ID).
+  * Upload via QR or manual class selection.
+* **Face Registration**:
+
+  * Apple-style flow → student rotates head slowly.
+  * Capture multiple embeddings (5–10), average, normalize.
+  * Store final embedding vector + metadata in Firebase under `students` collection.
+* Data structure in Firebase:
+
+```json
+students: {
+  "student123": {
+    "name": "Gabriel",
+    "roll_no": "733-039",
+    "class_id": "CSE-A",
+    "embedding": [0.12, -0.45, 0.89, ...],
+    "email": "example@email.com"
+  }
+}
+```
+
+---
+
+#### 3. **Live Attendance System**
+
+* **Flow**:
+
+  * Teacher starts a session → generates Class QR code.
+  * Students scan with mobile app → join attendance session.
+  * Python backend loads embeddings from Firebase for that class.
+  * Camera feed checks which student is in front of device → matches embedding.
+  * Attendance entry saved in Firebase under `attendance` collection.
+
+```json
+attendance: {
+  "2025-09-07_CSE-A": {
+    "student123": "09:15:22",
+    "student456": "09:18:45"
+  }
+}
+```
+
+---
+
+#### 4. **Teacher Dashboard (Frontend)**
+
+* React-based dashboard with:
+
+  * Class selection.
+  * Live attendance monitoring (see who’s marked, who’s absent).
+  * Export attendance as CSV/Excel.
+  * Graphical summary (Pie chart: present vs absent).
+  * Manual override option (mark attendance for a student if needed).
+  * Notification panel (absentees, upcoming classes).
+
+---
+
+#### 5. **Smart Class Scheduling**
+
+* Integrate **Gemini API via CREW AI**.
+* Teacher/admin provides constraints:
+
+  * Courses, faculty availability, rooms, time slots.
+* Gemini suggests an optimized schedule.
+* Save generated schedule in Firebase `schedules` collection.
+
+```json
+schedules: {
+  "CSE-A": {
+    "2025-09-07": [
+      {"subject": "AI", "time": "09:00-10:00", "faculty": "Dr. Kumar"},
+      {"subject": "DBMS", "time": "10:15-11:15", "faculty": "Prof. Rao"}
+    ]
+  }
+}
+```
+
+---
+
+#### 6. **Class Schedule Display**
+
+* Classroom devices (big screens or teacher’s dashboard) should:
+
+  * Show daily schedule pulled from Firebase.
+  * Display current class, upcoming class, faculty, time left.
+  * Auto-refresh after each class.
+
+---
+
+#### 7. **Additional Features from Problem Statement**
+
+* Free-period utilization suggestions (from problem statement).
+* Activity recommendations (study, sports, project work).
+* Simple “activity board” in dashboard for teachers to assign tasks during free slots.
+
+---
+
+### **UI/UX Requirements**
+
+* **Theme**: Light, minimal, pastel-based, modern (Apple-style).
+* **Frontend**:
+
+  * Use **React + Tailwind** for styling.
+  * Cards with rounded edges, soft shadows, grid layouts.
+  * Framer Motion for smooth animations.
+  * Responsive design (desktop & tablet).
+* **Mobile Student App (Optional)**: Flutter/React Native.
+
+---
+
+### **Tech Stack**
+
+* **Backend**: Python (FastAPI/Flask) for recognition + Firestore SDK.
+* **Frontend**: React + Tailwind + Framer Motion.
+* **Database**: Firebase Firestore.
+* **AI Scheduling**: Gemini API via CREW AI (API key from `.env`).
+* **Authentication**: Firebase Auth (students & teachers).
+
+---
+
+### **System Flow Summary**
+
+1. Student registers → details + embeddings stored.
+2. Teacher creates attendance session → QR generated.
+3. Students join via app → class code linked.
+4. Device camera recognizes faces → logs attendance in Firebase.
+5. Teacher dashboard displays real-time attendance + class schedules.
+6. Gemini API generates smart schedules, shown on dashboards.
+
