@@ -92,3 +92,4 @@ instance/
 .ipynb_checkpoints
 
 .env
+firebase-service-account.json
