@@ -10,3 +10,10 @@ plotly
 fastapi
 uvicorn
 flask
+firebase-admin
+google-cloud-firestore
+torch
+torchvision
+Pillow
+python-dotenv
+pydantic

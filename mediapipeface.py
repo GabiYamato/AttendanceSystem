@@ -55,7 +55,7 @@ options = vision.FaceLandmarkerOptions(
 )
 detector = vision.FaceLandmarker.create_from_options(options)
 
-
+count = 0
 # STEP 3: opencv live preview
 cap = cv2.VideoCapture(0)
 while cap.isOpened():
@@ -67,6 +67,12 @@ while cap.isOpened():
     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=ImageFormat.SRGB, data=rgb_image)
     detection_result = detector.detect(mp_image)
+
+    #print the landmarks every second
+    if count<5 and detection_result.face_landmarks:
+        print("*"*50)
+        print(detection_result.face_landmarks)
+        count += 1
 
     annotated_image = draw_landmarks_on_image(rgb_image, detection_result)
 
