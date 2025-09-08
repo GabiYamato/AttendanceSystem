@@ -1,41 +1,14 @@
-# Core ML and Computer Vision
-numpy>=1.24.0
-pandas>=2.0.0
-scikit-learn>=1.3.0
-tensorflow>=2.13.0
-opencv-python>=4.8.0
-matplotlib==3.8.0
-mediapipe>=0.10.0
-plotly>=5.15.0
-torch>=2.0.0
-torchvision>=0.15.0
-Pillow>=10.0.0
-
-# FastAPI Backend
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-python-multipart>=0.0.6
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-pydantic>=2.0.0
-
-# Firebase
-firebase-admin>=6.2.0
-google-cloud-firestore>=2.11.0
-
-# AI and Scheduling
-google-generativeai>=0.3.0
-crewai>=0.1.0
-
-# Data Processing
-datasets>=2.14.0
-openpyxl>=3.1.0
-python-dateutil>=2.8.2
-
-# Utilities
-python-dotenv>=1.0.0
-qrcode[pil]>=7.4.2
-requests>=2.31.0
-
-# Deprecated (keeping for compatibility)
-flask>=2.3.0
+fastapi
+uvicorn
+python-multipart
+opencv-python
+mediapipe
+numpy
+torch
+torchvision
+firebase-admin
+Pillow
+pydantic
+python-jose
+passlib
+bcrypt

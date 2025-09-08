@@ -1,76 +1,58 @@
 """
-Smart Attendance & Class Management System - Complete Backend
-Single FastAPI server handling all functionality
+FastAPI Face Recognition Attendance System
+Handles student registration, live attendance, and data retrieval
 """
-import os
+
+from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import cv2
+import mediapipe as mp
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import mediapipe as mp
-import qrcode
-import io
-import base64
-import json
-import pandas as pd
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import List, Dict, Optional
-import google.generativeai as genai
-from crewai import Agent, Task, Crew
-
-# FastAPI imports
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
-# Firebase
+import base64
+import io
+from PIL import Image
 import firebase_admin
 from firebase_admin import credentials, firestore
-from dotenv import load_dotenv
+import os
+from typing import List, Optional
+import json
 
-# Load environment variables
-load_dotenv()
-
-# Initialize Firebase
-try:
-    app_firebase = firebase_admin.get_app()
-except ValueError:
-    cred_path = "firebase-service-account.json"
-    if os.path.exists(cred_path):
-        cred = credentials.Certificate(cred_path)
-        app_firebase = firebase_admin.initialize_app(cred)
-    else:
-        app_firebase = firebase_admin.initialize_app()
-
-db = firestore.client()
-
-# Initialize Gemini AI
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
-
-# FastAPI app
-app = FastAPI(title="Smart Attendance System", version="1.0.0")
+app = FastAPI(title="Face Recognition Attendance API")
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],  # React dev server
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Serve static files (React build)
-if os.path.exists("frontend/build"):
-    app.mount("/static", StaticFiles(directory="frontend/build/static"), name="static")
+# Pydantic models
+class StudentRegistration(BaseModel):
+    class_id: str
+    student_id: str
+    student_name: str
 
-# === MODEL DEFINITIONS ===
+class AttendanceRequest(BaseModel):
+    class_id: str
+    image_data: str  # Base64 encoded image
 
+class AttendanceRecord(BaseModel):
+    student_id: str
+    student_name: str
+    timestamp: datetime
+    confidence: float
+    status: str
+
+# Firebase and ML setup
 class SimpleEmbeddingModel(nn.Module):
-    """Face embedding model"""
+    """Same model as training script"""
     def __init__(self, input_dim=1434, embedding_dim=128):
         super().__init__()
         self.layers = nn.Sequential(
@@ -83,56 +65,39 @@ class SimpleEmbeddingModel(nn.Module):
             nn.Linear(256, embedding_dim),
             nn.LayerNorm(embedding_dim)
         )
-    
+
     def forward(self, x):
         return F.normalize(self.layers(x), p=2, dim=1)
 
-# === PYDANTIC MODELS ===
-
-class StudentRegistration(BaseModel):
-    name: str
-    roll_no: str
-    email: str
-    class_id: str
-
-class AttendanceSession(BaseModel):
-    class_id: str
-    session_name: str
-    duration_minutes: int = 60
-
-class ScheduleConstraints(BaseModel):
-    courses: List[str]
-    faculty: List[str]
-    rooms: List[str]
-    time_slots: List[str]
-    constraints: Optional[str] = ""
-
-class ManualAttendance(BaseModel):
-    student_id: str
-    class_id: str
-    session_id: str
-    status: str = "present"
-
-# === GLOBAL VARIABLES ===
-
-face_recognition_system = None
-current_session = None
-
-class FaceRecognitionSystem:
+class FaceRecognitionService:
     def __init__(self):
+        self.setup_firebase()
         self.setup_mediapipe()
         self.load_model()
         
+    def setup_firebase(self):
+        """Initialize Firebase connection"""
+        try:
+            self.app = firebase_admin.get_app()
+        except ValueError:
+            cred_path = "firebase-service-account.json"
+            if os.path.exists(cred_path):
+                cred = credentials.Certificate(cred_path)
+                self.app = firebase_admin.initialize_app(cred)
+            else:
+                self.app = firebase_admin.initialize_app()
+        self.db = firestore.client()
+        print("✅ Firebase connected")
+
     def setup_mediapipe(self):
         """Setup MediaPipe components"""
         mp_face_detection = mp.solutions.face_detection
         mp_face_mesh = mp.solutions.face_mesh
         
         self.face_detection = mp_face_detection.FaceDetection(
-            model_selection=1, 
+            model_selection=1,
             min_detection_confidence=0.5
         )
-        
         self.face_mesh = mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,
@@ -140,650 +105,305 @@ class FaceRecognitionSystem:
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
-        
+        print("✅ MediaPipe initialized")
+
     def load_model(self):
         """Load trained embedding model"""
-        model_path = Path("trained_models/simple_face_model.pth")
-        
-        if not model_path.exists():
-            print("❌ No trained model found!")
+        model_path = "trained_models/simple_face_model.pth"
+        if os.path.exists(model_path):
+            self.model = SimpleEmbeddingModel()
+            self.model.load_state_dict(torch.load(model_path, map_location='cpu'))
+            self.model.eval()
+            print("✅ Model loaded")
+        else:
+            print("⚠️ No trained model found, using basic face detection")
             self.model = None
-            return
-            
-        self.model = SimpleEmbeddingModel()
-        self.model.load_state_dict(torch.load(model_path, map_location='cpu'))
-        self.model.eval()
-        
+
     def extract_landmarks(self, image):
         """Extract face landmarks from image"""
         try:
-            # Convert to RGB if needed
-            if len(image.shape) == 3:
-                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                rgb_image = image
-                
-            # Detect face first
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             detection_results = self.face_detection.process(rgb_image)
+            
             if not detection_results.detections:
                 return None
                 
-            # Extract landmarks
             results = self.face_mesh.process(rgb_image)
             if not results.multi_face_landmarks:
                 return None
-                
-            # Get landmarks (478 points * 3 coordinates = 1434 features)
+
             landmarks = results.multi_face_landmarks[0]
             landmark_points = []
             for landmark in landmarks.landmark:
                 landmark_points.extend([landmark.x, landmark.y, landmark.z])
-                
+            
             return np.array(landmark_points)
-            
         except Exception as e:
+            print(f"Error extracting landmarks: {e}")
             return None
-            
+
     def generate_embedding(self, landmarks):
         """Generate embedding from landmarks"""
         if self.model is None:
-            return None
-            
+            return landmarks[:128]  # Fallback to first 128 landmarks
+        
         try:
             with torch.no_grad():
                 landmarks_tensor = torch.FloatTensor(landmarks).unsqueeze(0)
                 embedding = self.model(landmarks_tensor)
                 return embedding.squeeze().numpy()
         except Exception as e:
+            print(f"Error generating embedding: {e}")
             return None
-            
+
     def cosine_similarity(self, emb1, emb2):
         """Compute cosine similarity between embeddings"""
-        return np.dot(emb1, emb2)
+        return np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
 
-# Initialize face recognition system
-face_recognition_system = FaceRecognitionSystem()
-
-# === UTILITY FUNCTIONS ===
-
-def generate_qr_code(data: str) -> str:
-    """Generate QR code and return as base64 string"""
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(data)
-    qr.make(fit=True)
-    
-    img = qr.make_image(fill_color="black", back_color="white")
-    buffer = io.BytesIO()
-    img.save(buffer, format='PNG')
-    buffer.seek(0)
-    
-    return base64.b64encode(buffer.getvalue()).decode()
-
-def process_image_from_upload(image_data: bytes) -> np.ndarray:
-    """Convert uploaded image to numpy array"""
-    nparr = np.frombuffer(image_data, np.uint8)
-    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    return image
-
-# === AI SCHEDULING FUNCTIONS ===
-
-def create_schedule_agent():
-    """Create AI agent for schedule optimization"""
-    return Agent(
-        role='Schedule Optimizer',
-        goal='Create optimal class schedules that minimize conflicts and maximize resource utilization',
-        backstory='You are an expert in educational scheduling with knowledge of academic constraints and optimization techniques.',
-        verbose=True,
-        allow_delegation=False
-    )
-
-def generate_smart_schedule(constraints: ScheduleConstraints) -> Dict:
-    """Generate optimized schedule using Gemini AI"""
-    try:
-        model = genai.GenerativeModel('gemini-pro')
-        
-        prompt = f"""
-        Create an optimized weekly class schedule with these constraints:
-        
-        Courses: {', '.join(constraints.courses)}
-        Faculty: {', '.join(constraints.faculty)}
-        Rooms: {', '.join(constraints.rooms)}
-        Time Slots: {', '.join(constraints.time_slots)}
-        Additional Constraints: {constraints.constraints}
-        
-        Requirements:
-        1. No faculty conflicts (same teacher can't be in two places)
-        2. No room conflicts (one class per room per slot)
-        3. Distribute courses evenly across the week
-        4. Consider break times between classes
-        5. Optimize for minimal travel time between rooms
-        
-        Return a JSON structure like:
-        {{
-            "Monday": [
-                {{"course": "AI", "faculty": "Dr. Kumar", "room": "CS-101", "time": "09:00-10:00"}},
-                {{"course": "DBMS", "faculty": "Prof. Rao", "room": "CS-102", "time": "10:15-11:15"}}
-            ],
-            "Tuesday": [...],
-            ...
-        }}
-        """
-        
-        response = model.generate_content(prompt)
-        
-        # Extract JSON from response
-        response_text = response.text
-        start_idx = response_text.find('{')
-        end_idx = response_text.rfind('}') + 1
-        
-        if start_idx != -1 and end_idx != -1:
-            json_str = response_text[start_idx:end_idx]
-            schedule = json.loads(json_str)
-            return {"success": True, "schedule": schedule}
-        else:
-            return {"success": False, "error": "Could not parse AI response"}
+    def base64_to_image(self, base64_string):
+        """Convert base64 string to OpenCV image"""
+        try:
+            # Remove data URL prefix if present
+            if base64_string.startswith('data:image'):
+                base64_string = base64_string.split(',')[1]
             
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+            image_data = base64.b64decode(base64_string)
+            image = Image.open(io.BytesIO(image_data))
+            opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            return opencv_image
+        except Exception as e:
+            print(f"Error converting base64 to image: {e}")
+            return None
 
-# === API ENDPOINTS ===
+# Initialize service
+face_service = FaceRecognitionService()
 
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Face Recognition Attendance API Started")
+
+# API Endpoints
 @app.get("/")
 async def root():
-    return {"message": "Smart Attendance System API", "version": "1.0.0"}
+    return {"message": "Face Recognition Attendance System API", "status": "active"}
 
-# === STUDENT MANAGEMENT ===
-
-@app.post("/api/students/register")
-async def register_student(
-    name: str = Form(...),
-    roll_no: str = Form(...),
-    email: str = Form(...),
-    class_id: str = Form(...),
-    images: List[UploadFile] = File(...)
-):
-    """Register a new student with face embeddings"""
+@app.post("/api/register-student")
+async def register_student(registration: StudentRegistration):
+    """Register a new student (without face data initially)"""
     try:
-        embeddings = []
-        
-        # Process each uploaded image
-        for image_file in images:
-            image_data = await image_file.read()
-            image = process_image_from_upload(image_data)
-            
-            # Extract landmarks and generate embedding
-            landmarks = face_recognition_system.extract_landmarks(image)
-            if landmarks is not None:
-                embedding = face_recognition_system.generate_embedding(landmarks)
-                if embedding is not None:
-                    embeddings.append(embedding.tolist())
-        
-        if len(embeddings) < 3:
-            raise HTTPException(status_code=400, detail="Need at least 3 valid face images")
-        
-        # Average the embeddings
-        avg_embedding = np.mean(embeddings, axis=0).tolist()
-        
-        # Store in Firebase
-        student_id = f"{class_id}_{roll_no}".replace("-", "_")
-        student_ref = db.collection('classes').document(class_id).collection('students').document(student_id)
-        
-        student_data = {
-            'name': name,
-            'roll_no': roll_no,
-            'email': email,
-            'class_id': class_id,
-            'embedding': avg_embedding,
+        student_ref = face_service.db.collection('classes').document(registration.class_id).collection('students').document(registration.student_id)
+        student_ref.set({
+            'name': registration.student_name,
+            'class_id': registration.class_id,
             'registered_at': datetime.now(),
             'is_active': True,
-            'total_embeddings': len(embeddings)
-        }
+            'face_registered': False
+        })
         
-        student_ref.set(student_data)
-        
-        return {
-            "success": True, 
-            "student_id": student_id,
-            "embeddings_processed": len(embeddings),
-            "message": f"Student {name} registered successfully"
-        }
-        
+        return {"message": f"Student {registration.student_name} registered successfully", "student_id": registration.student_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
-@app.get("/api/students/{class_id}")
-async def get_class_students(class_id: str):
-    """Get all students in a class"""
+@app.post("/api/register-face")
+async def register_face(class_id: str, student_id: str, image_data: str):
+    """Register face data for a student"""
     try:
-        students_ref = db.collection('classes').document(class_id).collection('students')
-        students = []
+        # Convert base64 to image
+        image = face_service.base64_to_image(image_data)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
         
-        for doc in students_ref.stream():
-            student_data = doc.to_dict()
-            student_data['student_id'] = doc.id
-            # Remove embedding for response size
-            student_data.pop('embedding', None)
-            students.append(student_data)
-        
-        return {"success": True, "students": students}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# === ATTENDANCE MANAGEMENT ===
-
-@app.post("/api/attendance/start-session")
-async def start_attendance_session(session: AttendanceSession):
-    """Start a new attendance session"""
-    try:
-        global current_session
-        
-        session_id = f"{session.class_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Create session document
-        session_ref = db.collection('attendance_sessions').document(session_id)
-        session_data = {
-            'class_id': session.class_id,
-            'session_name': session.session_name,
-            'created_at': datetime.now(),
-            'duration_minutes': session.duration_minutes,
-            'is_active': True,
-            'attendees': {}
-        }
-        
-        session_ref.set(session_data)
-        
-        # Generate QR code for session
-        qr_data = {
-            'session_id': session_id,
-            'class_id': session.class_id,
-            'type': 'attendance_session'
-        }
-        
-        qr_code = generate_qr_code(json.dumps(qr_data))
-        
-        current_session = {
-            'session_id': session_id,
-            'class_id': session.class_id,
-            'students_cache': {}
-        }
-        
-        # Load students for this class
-        students_ref = db.collection('classes').document(session.class_id).collection('students')
-        for doc in students_ref.stream():
-            student_data = doc.to_dict()
-            if student_data.get('is_active', True) and 'embedding' in student_data:
-                current_session['students_cache'][doc.id] = {
-                    'name': student_data['name'],
-                    'embedding': np.array(student_data['embedding'])
-                }
-        
-        return {
-            "success": True,
-            "session_id": session_id,
-            "qr_code": qr_code,
-            "students_loaded": len(current_session['students_cache']),
-            "expires_at": (datetime.now() + timedelta(minutes=session.duration_minutes)).isoformat()
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/attendance/recognize")
-async def recognize_face_for_attendance(image: UploadFile = File(...)):
-    """Recognize face and mark attendance"""
-    try:
-        global current_session
-        
-        if not current_session:
-            raise HTTPException(status_code=400, detail="No active attendance session")
-        
-        # Process uploaded image
-        image_data = await image.read()
-        image_np = process_image_from_upload(image_data)
-        
-        # Extract landmarks
-        landmarks = face_recognition_system.extract_landmarks(image_np)
+        # Extract landmarks and generate embedding
+        landmarks = face_service.extract_landmarks(image)
         if landmarks is None:
-            return {"success": False, "message": "No face detected"}
+            raise HTTPException(status_code=400, detail="No face detected in image")
         
-        # Generate embedding
-        query_embedding = face_recognition_system.generate_embedding(landmarks)
-        if query_embedding is None:
-            return {"success": False, "message": "Could not generate embedding"}
+        embedding = face_service.generate_embedding(landmarks)
+        if embedding is None:
+            raise HTTPException(status_code=400, detail="Failed to generate face embedding")
         
-        # Find best match
+        # Store embedding in Firebase
+        student_ref = face_service.db.collection('classes').document(class_id).collection('students').document(student_id)
+        embedding_ref = student_ref.collection('face_embeddings').document(f'embedding_{datetime.now().timestamp()}')
+        
+        embedding_ref.set({
+            'embedding': embedding.tolist(),
+            'registered_at': datetime.now()
+        })
+        
+        # Update student to mark face as registered
+        student_ref.update({'face_registered': True})
+        
+        return {"message": "Face registered successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Face registration failed: {str(e)}")
+
+@app.post("/api/mark-attendance")
+async def mark_attendance(request: AttendanceRequest):
+    """Mark attendance using face recognition"""
+    try:
+        # Convert base64 to image
+        image = face_service.base64_to_image(request.image_data)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+        
+        # Extract landmarks from current image
+        current_landmarks = face_service.extract_landmarks(image)
+        if current_landmarks is None:
+            return {"recognized": False, "message": "No face detected"}
+        
+        current_embedding = face_service.generate_embedding(current_landmarks)
+        if current_embedding is None:
+            return {"recognized": False, "message": "Failed to process face"}
+        
+        # Get all students in class
+        students_ref = face_service.db.collection('classes').document(request.class_id).collection('students')
+        students = students_ref.where('face_registered', '==', True).stream()
+        
         best_match = None
         best_similarity = -1
         threshold = 0.7
         
-        for student_id, student_data in current_session['students_cache'].items():
-            similarity = face_recognition_system.cosine_similarity(
-                query_embedding, student_data['embedding']
-            )
+        for student_doc in students:
+            student_data = student_doc.to_dict()
+            student_id = student_doc.id
             
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_match = (student_id, student_data['name'])
-        
-        if best_similarity >= threshold:
-            student_id, student_name = best_match
+            # Get student's face embeddings
+            embeddings_ref = student_doc.reference.collection('face_embeddings')
+            embeddings = embeddings_ref.stream()
             
-            # Check if already marked
-            session_ref = db.collection('attendance_sessions').document(current_session['session_id'])
-            session_doc = session_ref.get()
-            
-            if session_doc.exists:
-                session_data = session_doc.to_dict()
-                attendees = session_data.get('attendees', {})
+            for emb_doc in embeddings:
+                emb_data = emb_doc.to_dict()
+                stored_embedding = np.array(emb_data['embedding'])
                 
-                if student_id not in attendees:
-                    # Mark attendance
-                    attendees[student_id] = {
-                        'name': student_name,
-                        'timestamp': datetime.now().isoformat(),
-                        'confidence': float(best_similarity)
-                    }
-                    
-                    session_ref.update({'attendees': attendees})
-                    
-                    return {
-                        "success": True,
-                        "recognized": True,
-                        "student": {
-                            "id": student_id,
-                            "name": student_name,
-                            "confidence": best_similarity
-                        },
-                        "message": f"Attendance marked for {student_name}"
-                    }
-                else:
-                    return {
-                        "success": True,
-                        "recognized": True,
-                        "student": {
-                            "id": student_id,
-                            "name": student_name,
-                            "confidence": best_similarity
-                        },
-                        "message": f"Already marked: {student_name}"
+                similarity = face_service.cosine_similarity(current_embedding, stored_embedding)
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = {
+                        'student_id': student_id,
+                        'student_name': student_data['name'],
+                        'confidence': similarity
                     }
         
-        return {
-            "success": True,
-            "recognized": False,
-            "message": f"No match found (best: {best_similarity:.3f})"
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/attendance/session/{session_id}")
-async def get_attendance_session(session_id: str):
-    """Get attendance session details"""
-    try:
-        session_ref = db.collection('attendance_sessions').document(session_id)
-        session_doc = session_ref.get()
-        
-        if not session_doc.exists:
-            raise HTTPException(status_code=404, detail="Session not found")
-        
-        session_data = session_doc.to_dict()
-        
-        # Get class students for comparison
-        class_id = session_data['class_id']
-        students_ref = db.collection('classes').document(class_id).collection('students')
-        total_students = len(list(students_ref.stream()))
-        
-        attendees = session_data.get('attendees', {})
-        present_count = len(attendees)
-        absent_count = total_students - present_count
-        
-        return {
-            "success": True,
-            "session": {
-                "session_id": session_id,
-                "class_id": class_id,
-                "session_name": session_data.get('session_name'),
-                "created_at": session_data.get('created_at'),
-                "is_active": session_data.get('is_active'),
-                "attendees": attendees,
-                "stats": {
-                    "total_students": total_students,
-                    "present": present_count,
-                    "absent": absent_count,
-                    "attendance_rate": (present_count / total_students * 100) if total_students > 0 else 0
+        if best_match and best_similarity >= threshold:
+            # Check if already marked today
+            today = datetime.now().strftime('%Y-%m-%d')
+            attendance_ref = (face_service.db.collection('classes')
+                            .document(request.class_id)
+                            .collection('attendance')
+                            .document(today)
+                            .collection('records')
+                            .document(best_match['student_id']))
+            
+            existing = attendance_ref.get()
+            if existing.exists:
+                return {
+                    "recognized": True,
+                    "already_marked": True,
+                    "student_name": best_match['student_name'],
+                    "message": "Attendance already marked today"
                 }
-            }
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/attendance/manual")
-async def mark_manual_attendance(attendance: ManualAttendance):
-    """Manually mark attendance for a student"""
-    try:
-        session_ref = db.collection('attendance_sessions').document(attendance.session_id)
-        session_doc = session_ref.get()
-        
-        if not session_doc.exists:
-            raise HTTPException(status_code=404, detail="Session not found")
-        
-        # Get student info
-        student_ref = db.collection('classes').document(attendance.class_id).collection('students').document(attendance.student_id)
-        student_doc = student_ref.get()
-        
-        if not student_doc.exists:
-            raise HTTPException(status_code=404, detail="Student not found")
-        
-        student_data = student_doc.to_dict()
-        
-        # Update session
-        session_data = session_doc.to_dict()
-        attendees = session_data.get('attendees', {})
-        
-        attendees[attendance.student_id] = {
-            'name': student_data['name'],
-            'timestamp': datetime.now().isoformat(),
-            'confidence': 1.0,
-            'manual': True
-        }
-        
-        session_ref.update({'attendees': attendees})
-        
-        return {
-            "success": True,
-            "message": f"Manual attendance marked for {student_data['name']}"
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/attendance/export/{session_id}")
-async def export_attendance(session_id: str):
-    """Export attendance as CSV"""
-    try:
-        session_ref = db.collection('attendance_sessions').document(session_id)
-        session_doc = session_ref.get()
-        
-        if not session_doc.exists:
-            raise HTTPException(status_code=404, detail="Session not found")
-        
-        session_data = session_doc.to_dict()
-        attendees = session_data.get('attendees', {})
-        
-        # Create DataFrame
-        data = []
-        for student_id, attendance_info in attendees.items():
-            data.append({
-                'Student ID': student_id,
-                'Name': attendance_info['name'],
-                'Timestamp': attendance_info['timestamp'],
-                'Confidence': attendance_info['confidence'],
-                'Manual': attendance_info.get('manual', False)
+            
+            # Mark attendance
+            attendance_ref.set({
+                'student_id': best_match['student_id'],
+                'student_name': best_match['student_name'],
+                'timestamp': datetime.now(),
+                'confidence': float(best_similarity),
+                'status': 'present'
             })
-        
-        df = pd.DataFrame(data)
-        
-        # Convert to CSV
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)
-        
-        return StreamingResponse(
-            io.BytesIO(csv_buffer.getvalue().encode()),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=attendance_{session_id}.csv"}
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# === SCHEDULE MANAGEMENT ===
-
-@app.post("/api/schedules/generate")
-async def generate_schedule(constraints: ScheduleConstraints):
-    """Generate optimized schedule using AI"""
-    try:
-        result = generate_smart_schedule(constraints)
-        
-        if result["success"]:
-            # Save schedule to Firebase
-            schedule_id = f"schedule_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            schedule_ref = db.collection('schedules').document(schedule_id)
-            
-            schedule_data = {
-                'schedule_id': schedule_id,
-                'schedule': result["schedule"],
-                'constraints': constraints.dict(),
-                'created_at': datetime.now(),
-                'is_active': True
-            }
-            
-            schedule_ref.set(schedule_data)
             
             return {
-                "success": True,
-                "schedule_id": schedule_id,
-                "schedule": result["schedule"]
+                "recognized": True,
+                "student_name": best_match['student_name'],
+                "confidence": float(best_similarity),
+                "message": "Attendance marked successfully"
             }
         else:
-            raise HTTPException(status_code=500, detail=result["error"])
+            return {
+                "recognized": False,
+                "confidence": float(best_similarity) if best_match else 0.0,
+                "message": "Face not recognized"
+            }
             
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Attendance marking failed: {str(e)}")
 
-@app.get("/api/schedules/{class_id}/today")
-async def get_today_schedule(class_id: str):
-    """Get today's schedule for a class"""
+@app.get("/api/classes/{class_id}/students")
+async def get_class_students(class_id: str):
+    """Get all students in a class"""
     try:
-        # Get the most recent active schedule
-        schedules_ref = db.collection('schedules').where('is_active', '==', True).order_by('created_at', direction=firestore.Query.DESCENDING).limit(1)
+        students_ref = face_service.db.collection('classes').document(class_id).collection('students')
+        students = []
         
-        schedule_docs = list(schedules_ref.stream())
-        if not schedule_docs:
-            return {"success": True, "schedule": [], "message": "No active schedule found"}
+        for student_doc in students_ref.stream():
+            student_data = student_doc.to_dict()
+            students.append({
+                'student_id': student_doc.id,
+                'name': student_data['name'],
+                'face_registered': student_data.get('face_registered', False),
+                'registered_at': student_data['registered_at'].isoformat() if student_data.get('registered_at') else None
+            })
         
-        schedule_data = schedule_docs[0].to_dict()
-        full_schedule = schedule_data.get('schedule', {})
+        return {"students": students}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch students: {str(e)}")
+
+@app.get("/api/classes/{class_id}/attendance")
+async def get_class_attendance(class_id: str, date: Optional[str] = None):
+    """Get attendance for a class on a specific date"""
+    try:
+        if not date:
+            date = datetime.now().strftime('%Y-%m-%d')
         
-        # Get today's day name
-        today = datetime.now().strftime('%A')
-        today_schedule = full_schedule.get(today, [])
+        attendance_ref = (face_service.db.collection('classes')
+                         .document(class_id)
+                         .collection('attendance')
+                         .document(date)
+                         .collection('records'))
         
-        # Filter for specific class if needed
-        filtered_schedule = []
-        for slot in today_schedule:
-            # Add class_id matching logic if needed
-            filtered_schedule.append(slot)
+        attendance_records = []
+        for record_doc in attendance_ref.stream():
+            record_data = record_doc.to_dict()
+            attendance_records.append({
+                'student_id': record_data['student_id'],
+                'student_name': record_data['student_name'],
+                'timestamp': record_data['timestamp'].isoformat(),
+                'confidence': record_data['confidence'],
+                'status': record_data['status']
+            })
         
         return {
-            "success": True,
-            "schedule": filtered_schedule,
-            "day": today,
-            "class_id": class_id
+            "date": date,
+            "class_id": class_id,
+            "attendance": attendance_records,
+            "total_present": len(attendance_records)
         }
-        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to fetch attendance: {str(e)}")
 
-@app.get("/api/schedules")
-async def get_all_schedules():
-    """Get all schedules"""
+@app.get("/api/classes")
+async def get_all_classes():
+    """Get all classes"""
     try:
-        schedules_ref = db.collection('schedules').order_by('created_at', direction=firestore.Query.DESCENDING)
-        schedules = []
+        classes_ref = face_service.db.collection('classes')
+        classes = []
         
-        for doc in schedules_ref.stream():
-            schedule_data = doc.to_dict()
-            schedule_data['schedule_id'] = doc.id
-            schedules.append(schedule_data)
-        
-        return {"success": True, "schedules": schedules}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# === DASHBOARD ANALYTICS ===
-
-@app.get("/api/dashboard/stats")
-async def get_dashboard_stats():
-    """Get dashboard statistics"""
-    try:
-        # Count total students
-        total_students = 0
-        classes_ref = db.collection('classes')
         for class_doc in classes_ref.stream():
-            students_ref = class_doc.reference.collection('students')
-            total_students += len(list(students_ref.stream()))
+            class_id = class_doc.id
+            # Count students
+            students_count = len(list(class_doc.reference.collection('students').stream()))
+            
+            classes.append({
+                'class_id': class_id,
+                'students_count': students_count
+            })
         
-        # Count active sessions
-        sessions_ref = db.collection('attendance_sessions').where('is_active', '==', True)
-        active_sessions = len(list(sessions_ref.stream()))
-        
-        # Count total classes
-        total_classes = len(list(classes_ref.stream()))
-        
-        # Recent attendance rate
-        recent_sessions = db.collection('attendance_sessions').order_by('created_at', direction=firestore.Query.DESCENDING).limit(10)
-        total_attendance_rate = 0
-        session_count = 0
-        
-        for session_doc in recent_sessions.stream():
-            session_data = session_doc.to_dict()
-            attendees = len(session_data.get('attendees', {}))
-            # Rough estimate - would need actual class size
-            if attendees > 0:
-                total_attendance_rate += min(attendees / 30 * 100, 100)  # Assuming max 30 students
-                session_count += 1
-        
-        avg_attendance_rate = total_attendance_rate / session_count if session_count > 0 else 0
-        
-        return {
-            "success": True,
-            "stats": {
-                "total_students": total_students,
-                "total_classes": total_classes,
-                "active_sessions": active_sessions,
-                "average_attendance_rate": round(avg_attendance_rate, 1)
-            }
-        }
-        
+        return {"classes": classes}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# === HEALTH CHECK ===
-
-@app.get("/api/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "model_loaded": face_recognition_system.model is not None,
-        "firebase_connected": True
-    }
+        raise HTTPException(status_code=500, detail=f"Failed to fetch classes: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
