@@ -93,3 +93,5 @@ instance/
 
 .env
 firebase-service-account.json
+
+frontend_deprecated/
