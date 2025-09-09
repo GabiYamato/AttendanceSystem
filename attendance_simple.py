@@ -223,16 +223,24 @@ class FaceRecognitionSystem:
         cap = cv2.VideoCapture(0)
         recognition_count = 0
         successful_recognition = 0
-        skip_frames = 0  # Skip some frames for better performance
+        skip_frames = 0
+        last_recognized_student = None
+        last_recognition_time = 0
+        recognition_display_time = 0  # Time to display recognition result
+        last_attendance_marked = {}  # Track last attendance marking per student
         
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
                 
-            # Process every 3rd frame for better performance
+            current_time = time.time()
+            
+            # Process every 5th frame for better performance
             skip_frames += 1
-            if skip_frames % 3 != 0:
+            if skip_frames % 5 != 0:
+                # Still show overlay text during skipped frames
+                self._display_overlay(frame, last_recognized_student, recognition_display_time, current_time, recognition_count, successful_recognition)
                 cv2.imshow('Live Recognition', frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -240,6 +248,8 @@ class FaceRecognitionSystem:
                 
             # Extract landmarks
             landmarks = self.extract_landmarks(frame)
+            display_text = ""
+            display_color = (255, 255, 255)  # Default white
             
             if landmarks is not None:
                 # Recognize face
@@ -249,35 +259,43 @@ class FaceRecognitionSystem:
                 if match:
                     student_id, student_name = match
                     successful_recognition += 1
+                    last_recognized_student = (student_name, confidence)
+                    last_recognition_time = current_time
+                    recognition_display_time = current_time + 2.0  # Display for 2 seconds
                     
-                    # Check if already marked recently
-                    if not self.firebase.check_recent_attendance(class_id, student_id):
-                        # Mark attendance
-                        if self.firebase.mark_attendance(class_id, student_id, confidence):
-                            print(f"✅ {student_name} - Attendance marked (confidence: {confidence:.3f})")
-                        
-                    # Show recognition on frame
-                    cv2.putText(frame, f"{student_name}", 
-                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    cv2.putText(frame, f"{confidence:.3f}", 
-                               (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    # Check if already marked recently (avoid spam marking)
+                    recent_check = self.firebase.check_recent_attendance(class_id, student_id, minutes=5)
+                    
+                    # Only mark attendance if not marked recently
+                    if not recent_check:
+                        try:
+                            if self.firebase.mark_attendance(class_id, student_id, confidence):
+                                print(f"✅ {student_name} - Attendance marked (confidence: {confidence:.3f})")
+                                last_attendance_marked[student_id] = current_time
+                            else:
+                                print(f"❌ Failed to mark attendance for {student_name}")
+                        except Exception as e:
+                            print(f"❌ Error marking attendance for {student_name}: {e}")
+                    
+                    display_text = f"Recognized: {student_name}"
+                    display_color = (0, 255, 0)  # Green
+                    
+                    # Add 1 second delay after recognition
+                    time.sleep(1.0)
+                    
                 else:
-                    # Show no match (only display every 30 frames to reduce lag)
-                    if recognition_count % 30 == 0:
-                        cv2.putText(frame, f"No match", 
-                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    # Only update display occasionally to reduce flicker
+                    if recognition_count % 15 == 0:
+                        display_text = "Unknown person"
+                        display_color = (0, 165, 255)  # Orange
             else:
-                # Only show "no face" message every 60 frames to reduce clutter
-                if recognition_count % 60 == 0:
-                    cv2.putText(frame, "No face detected", 
-                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                # Only update display occasionally
+                if recognition_count % 20 == 0:
+                    display_text = "No face detected"
+                    display_color = (255, 0, 0)  # Red
                 
-            # Show stats
-            if recognition_count > 0:
-                success_rate = (successful_recognition / recognition_count) * 100
-                cv2.putText(frame, f"Success: {success_rate:.1f}% ({successful_recognition}/{recognition_count})", 
-                           (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                
+            # Display overlay
+            self._display_overlay(frame, last_recognized_student, recognition_display_time, current_time, recognition_count, successful_recognition, display_text, display_color)
             cv2.imshow('Live Recognition', frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -290,6 +308,34 @@ class FaceRecognitionSystem:
         print(f"   Total recognitions: {recognition_count}")
         print(f"   Successful: {successful_recognition}")
         print(f"   Success rate: {(successful_recognition/recognition_count)*100:.1f}%" if recognition_count > 0 else "   Success rate: 0%")
+        
+    def _display_overlay(self, frame, last_recognized_student, recognition_display_time, current_time, recognition_count, successful_recognition, display_text="", display_color=(255, 255, 255)):
+        """Helper method to display overlay text consistently"""
+        # Clear area for text (add a semi-transparent background)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (frame.shape[1], 120), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+        
+        # Show last recognized student if within display time
+        if last_recognized_student and current_time < recognition_display_time:
+            student_name, confidence = last_recognized_student
+            cv2.putText(frame, f"RECOGNIZED: {student_name}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(frame, f"Confidence: {confidence:.3f}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        elif display_text:
+            cv2.putText(frame, display_text, 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, display_color, 2)
+        
+        # Show stats in bottom area
+        if recognition_count > 0:
+            success_rate = (successful_recognition / recognition_count) * 100
+            cv2.putText(frame, f"Success: {success_rate:.1f}% ({successful_recognition}/{recognition_count})", 
+                       (10, frame.shape[0] - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Show instructions
+        cv2.putText(frame, "Press 'q' to quit", 
+                   (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
 def main():
     parser = argparse.ArgumentParser(description='Simple Face Recognition Attendance')

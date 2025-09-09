@@ -129,10 +129,14 @@ class SimpleFirebase:
             if doc.exists:
                 data = doc.to_dict()
                 last_time = data.get('timestamp')
-                if last_time and last_time > cutoff_time:
-                    return True
+                if last_time and hasattr(last_time, 'replace'):  # Check if it's a datetime object
+                    # Convert to timezone-naive datetime for comparison
+                    if last_time.tzinfo is not None:
+                        last_time = last_time.replace(tzinfo=None)
+                    if last_time > cutoff_time:
+                        return True
             return False
             
         except Exception as e:
             print(f"❌ Error checking attendance: {e}")
-            return False
+            return False  # Default to allowing attendance marking if there's an error
