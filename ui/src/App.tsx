@@ -4,7 +4,7 @@ import Navbar from './components/Navbar';
 import Dashboard from './pages/Dashboard';
 import AttendancePage from './pages/AttendancePage';
 import RegisterStudent from './pages/RegisterStudent';
-import ClassDashboard from './pages/ClassDashboard';
+import ClassDashboard from './pages/ClassDashboard.tsx';
 import './App.css';
 
 function App() {
