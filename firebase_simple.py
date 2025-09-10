@@ -140,3 +140,67 @@ class SimpleFirebase:
         except Exception as e:
             print(f"❌ Error checking attendance: {e}")
             return False  # Default to allowing attendance marking if there's an error
+
+    def list_class_students(self, class_id):
+        """List all students in a class"""
+        try:
+            students = []
+            students_ref = self.db.collection('classes').document(class_id).collection('students')
+            
+            for student_doc in students_ref.stream():
+                student_data = student_doc.to_dict()
+                students.append({
+                    'student_id': student_doc.id,
+                    'name': student_data.get('name', 'Unknown'),
+                    'registered_at': student_data.get('registered_at'),
+                    'is_active': student_data.get('is_active', True)
+                })
+            
+            return students
+            
+        except Exception as e:
+            print(f"❌ Error listing students: {e}")
+            return []
+
+    def delete_student(self, class_id, student_id):
+        """Delete a specific student and all their data"""
+        try:
+            student_ref = self.db.collection('classes').document(class_id).collection('students').document(student_id)
+            
+            # Delete embeddings subcollection
+            embeddings_ref = student_ref.collection('embeddings')
+            for emb_doc in embeddings_ref.stream():
+                emb_doc.reference.delete()
+            
+            # Delete attendance subcollection
+            attendance_ref = student_ref.collection('attendance')
+            for att_doc in attendance_ref.stream():
+                att_doc.reference.delete()
+            
+            # Delete student document
+            student_ref.delete()
+            
+            print(f"✅ Deleted student {student_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error deleting student {student_id}: {e}")
+            return False
+
+    def clear_class_data(self, class_id):
+        """Clear all student data for a class"""
+        try:
+            students_ref = self.db.collection('classes').document(class_id).collection('students')
+            
+            deleted_count = 0
+            for student_doc in students_ref.stream():
+                student_id = student_doc.id
+                if self.delete_student(class_id, student_id):
+                    deleted_count += 1
+            
+            print(f"✅ Cleared {deleted_count} students from class {class_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error clearing class data: {e}")
+            return False
