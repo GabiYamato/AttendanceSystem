@@ -107,37 +107,44 @@ class HackathonFaceRecognizer:
         """Register a new student with multiple face captures for robustness"""
         print(f"\n🎯 Registering: {student_name} ({student_id}) in {class_id}")
         print("📷 Starting camera for registration...")
-        print(f"📋 Capturing {num_captures} frames automatically - look at camera, vary poses slightly")
-        print("   • System will capture frames every 0.5 seconds")
-        print("   • Press 'q' to cancel early")
+        print(f"📋 Capturing {num_captures} frames manually - look at camera, vary poses slightly")
+        print("   • Press SPACEBAR to capture a frame")
+        print("   • Press 'q' to finish early or cancel")
+        print("   • Camera running at 24 FPS")
 
         cap = cv2.VideoCapture(0)
+        # Set camera to 24 FPS
+        cap.set(cv2.CAP_PROP_FPS, 24)
         encodings = []
-        start_time = time.time()
+        frame_delay = int(1000 / 24)  # ~42ms delay for 24 FPS
 
         while len(encodings) < num_captures:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # Find face locations and encodings
-            face_locations = face_recognition.face_locations(frame)
-            face_encodings = face_recognition.face_encodings(frame, face_locations)
-
-            if face_encodings:
-                encodings.append(face_encodings[0])  # Take the first face
-                print(f"✅ Capture {len(encodings)}/{num_captures}")
-            else:
-                print("⚠️ No face detected - try again")
-
-            # Display preview
+            # Display preview with instructions
             preview = frame.copy()
             cv2.putText(preview, f"Captures: {len(encodings)}/{num_captures}", 
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(preview, "Press SPACEBAR to capture", 
+                        (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(preview, "Press 'q' to quit", 
+                        (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Registration', preview)
 
-            # Wait 0.5s between captures
-            if cv2.waitKey(500) & 0xFF == ord('q'):
+            key = cv2.waitKey(frame_delay) & 0xFF
+            if key == ord(' '):  # Spacebar pressed
+                # Find face locations and encodings
+                face_locations = face_recognition.face_locations(frame)
+                face_encodings = face_recognition.face_encodings(frame, face_locations)
+
+                if face_encodings:
+                    encodings.append(face_encodings[0])  # Take the first face
+                    print(f"✅ Capture {len(encodings)}/{num_captures}")
+                else:
+                    print("⚠️ No face detected - try again")
+            elif key == ord('q'):
                 break
 
         cap.release()
@@ -163,6 +170,7 @@ class HackathonFaceRecognizer:
         print(f"\n🎯 Starting live detection for {class_id}")
         print(f"🔍 Tolerance: {tolerance} (lower = stricter)")
         print("📹 Press 'q' to quit, 'r' to reload students")
+        print("📹 Running at 24 FPS")
 
         # Load students
         self.load_class_students(class_id)
@@ -179,6 +187,9 @@ class HackathonFaceRecognizer:
                 known_names.append(data['name'])
 
         cap = cv2.VideoCapture(0)
+        # Set camera to 24 FPS
+        cap.set(cv2.CAP_PROP_FPS, 24)
+        frame_delay = int(1000 / 24)  # ~42ms delay for 24 FPS
 
         while True:
             ret, frame = cap.read()
@@ -208,7 +219,7 @@ class HackathonFaceRecognizer:
             # Display the resulting frame
             cv2.imshow('Live Detection', frame)
 
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKey(frame_delay) & 0xFF
             if key == ord('q'):
                 break
             elif key == ord('r'):
