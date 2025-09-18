@@ -169,9 +169,7 @@ class HackathonFaceRecognizer:
         """Live face detection and recognition preview"""
         print(f"\n🎯 Starting live detection for {class_id}")
         print(f"🔍 Tolerance: {tolerance} (lower = stricter)")
-        print("📹 Press 'q' to quit, 'r' to reload students")
-        print("📹 Running at 24 FPS")
-
+ 
         # Load students
         self.load_class_students(class_id)
         if not self.students_cache:
@@ -189,7 +187,7 @@ class HackathonFaceRecognizer:
         cap = cv2.VideoCapture(0)
         # Set camera to 24 FPS
         cap.set(cv2.CAP_PROP_FPS, 24)
-        frame_delay = int(1000 / 24)  # ~42ms delay for 24 FPS
+        # frame_delay = int(1000 / 24)  # ~42ms delay for 24 FPS
 
         while True:
             ret, frame = cap.read()
@@ -219,7 +217,7 @@ class HackathonFaceRecognizer:
             # Display the resulting frame
             cv2.imshow('Live Detection', frame)
 
-            key = cv2.waitKey(frame_delay) & 0xFF
+            key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
             elif key == ord('r'):
