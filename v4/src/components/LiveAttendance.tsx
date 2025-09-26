@@ -32,6 +32,8 @@ const LiveAttendance: React.FC<LiveAttendanceProps> = ({
   const [isScanning, setIsScanning] = useState(false)
   const [scanResults, setScanResults] = useState<string[]>([])
   const [sessionAttendance, setSessionAttendance] = useState<string[]>([])
+  const [threshold, setThreshold] = useState(75) // Default 75% confidence threshold
+  const [showSettings, setShowSettings] = useState(false)
   const scanningRef = useRef<boolean>(false)
 
   const handleStartScanning = useCallback(async () => {
@@ -100,7 +102,7 @@ const LiveAttendance: React.FC<LiveAttendanceProps> = ({
               
               console.log(`Face ${i + 1}: ${match.label} (confidence: ${confidence}%, distance: ${match.distance.toFixed(3)})`)
               
-              if (match.label !== 'unknown' && match.distance < 0.5) {
+              if (match.label !== 'unknown' && confidence >= threshold) {
                 // Recognized face - green box
                 ctx.strokeStyle = '#27ae60'
                 ctx.lineWidth = 3
@@ -126,6 +128,26 @@ const LiveAttendance: React.FC<LiveAttendanceProps> = ({
                   console.log('Recording attendance for:', match.label)
                   await recordAttendance(match.label)
                 }
+              } else if (match.label !== 'unknown') {
+                // Recognized but below threshold - yellow box
+                ctx.strokeStyle = '#f39c12'
+                ctx.lineWidth = 3
+                ctx.strokeRect(box.x, box.y, box.width, box.height)
+                
+                // Draw background for text
+                ctx.fillStyle = 'rgba(243, 156, 18, 0.8)'
+                ctx.fillRect(box.x, box.y - 35, Math.max(box.width, 200), 35)
+                
+                // Draw label
+                ctx.fillStyle = '#ffffff'
+                ctx.font = 'bold 16px Arial'
+                ctx.textAlign = 'center'
+                ctx.fillText(
+                  `${match.label} (${confidence}%) - Low Confidence`,
+                  box.x + box.width / 2,
+                  box.y - 10
+                )
+                ctx.textAlign = 'start'
               } else {
                 // Unknown face - red box
                 ctx.strokeStyle = '#e74c3c'
@@ -227,46 +249,82 @@ const LiveAttendance: React.FC<LiveAttendanceProps> = ({
 
   return (
     <div className="scan-view">
-      <div className="view-header">
-        <h2>Live Attendance Scan</h2>
-        <p className="view-description">
-          Start scanning to detect and mark attendance for registered faces
-        </p>
-        {registeredFaces.length === 0 && (
-          <div className="warning-message">
-            ⚠️ No registered faces found. Please register faces first.
-          </div>
-        )}
-      </div>
-
       <div className="scan-controls">
-        {!isScanning ? (
-          <div className="control-buttons">
+        <div className="horizontal-controls">
+          <div className="main-controls">
+            {!isScanning ? (
+              <button 
+                onClick={handleStartScanning} 
+                className="start-scan-btn"
+                disabled={!isModelLoaded}
+              >
+                {!isModelLoaded ? '⏳ Loading...' : '▶️ Start Scanning'}
+              </button>
+            ) : (
+              <button onClick={handleStopScanning} className="stop-scan-btn">
+                ⏹️ Stop Scanning
+              </button>
+            )}
+          </div>
+
+          <div className="session-info">
+            {isScanning && (
+              <>
+                <div className="scanning-indicator">
+                  <span className="pulse-dot"></span>
+                  <span>Live scanning...</span>
+                </div>
+                <div className="session-stats">
+                  <span className="session-detected">Detected: {scanResults.length}</span>
+                  <span className="threshold-display">Threshold: {threshold}%</span>
+                </div>
+              </>
+            )}
+            {!isScanning && scanResults.length > 0 && (
+              <div className="session-summary">
+                Session complete: {scanResults.length} attendance(s) recorded
+              </div>
+            )}
+          </div>
+
+          <div className="control-actions">
             <button 
-              onClick={handleStartScanning} 
-              className="start-scan-btn"
-              disabled={!isModelLoaded}
+              onClick={() => setShowSettings(!showSettings)}
+              className="settings-btn"
+              title="Adjust recognition threshold"
             >
-              {!isModelLoaded ? 'Loading Models...' : '📹 Start Scanning'}
+              ⚙️ Settings
             </button>
+            {isScanning && (
+              <button onClick={handleClearSession} className="clear-session-btn">
+                🗑️ Clear
+              </button>
+            )}
             <button 
               onClick={onBack}
               className="back-btn"
             >
-              Back to Dashboard
+              ← Back
             </button>
           </div>
-        ) : (
-          <div className="scanning-active">
-            <button onClick={handleStopScanning} className="stop-scan-btn">
-              ⏹️ Stop Scanning
-            </button>
-            <button onClick={handleClearSession} className="clear-session-btn">
-              🗑️ Clear Session
-            </button>
-            <div className="scanning-indicator">
-              <span className="pulse-dot"></span>
-              Live scanning in progress...
+        </div>
+
+        {showSettings && (
+          <div className="settings-panel">
+            <div className="setting-item">
+              <label htmlFor="threshold-slider">Recognition Threshold: {threshold}%</label>
+              <input
+                id="threshold-slider"
+                type="range"
+                min="50"
+                max="95"
+                value={threshold}
+                onChange={(e) => setThreshold(Number(e.target.value))}
+                className="threshold-slider"
+              />
+              <div className="threshold-help">
+                Higher values require more confident matches for attendance marking
+              </div>
             </div>
           </div>
         )}
