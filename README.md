@@ -23,7 +23,7 @@ A modern web-based attendance tracking system using facial recognition technolog
 
 1. **Clone the repository**:
    ```bash
-   git clone repo_url
+   git clone https://github.com/GabiYamato/AttendanceSystem.git
    cd AttendanceSystem/v4
    ```
 
