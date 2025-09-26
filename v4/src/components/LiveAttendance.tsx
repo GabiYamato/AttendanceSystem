@@ -278,26 +278,6 @@ const LiveAttendance: React.FC<LiveAttendanceProps> = ({
         </div>
       )}
 
-      {(scanResults.length > 0 || isScanning) && (
-        <div className="scan-results">
-          <h3>Session Results</h3>
-          {scanResults.length > 0 ? (
-            <div>
-              <p className="results-summary">
-                ✅ Attendance marked for {scanResults.length} person(s):
-              </p>
-              <div className="detected-names">
-                {scanResults.map((name, index) => (
-                  <span key={index} className="detected-name">{name}</span>
-                ))}
-              </div>
-            </div>
-          ) : isScanning ? (
-            <p className="waiting-message">🔍 Scanning for faces...</p>
-          ) : null}
-        </div>
-      )}
-
       <div className="camera-container">
         <div className="video-wrapper">
           <video 
