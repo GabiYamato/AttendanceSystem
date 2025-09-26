@@ -12,3 +12,7 @@ pydantic
 python-jose
 passlib
 bcrypt
+streamlit
+qrcode[pil]
+face-recognition
+dlib
