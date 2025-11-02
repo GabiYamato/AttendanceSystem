@@ -15,7 +15,7 @@ This is a step-by-step attendance system that combines QR code verification and 
 - 📱 Streamlit web interface
 
 ## Prerequisites
-1. Students must be registered using `face_recognizer.py` first
+1. Students must be registered using `face_recognizer.py` first 
 2. Firebase service account credentials (`firebase-service-account.json`)
 3. Camera access for QR scanning and face recognition
 
